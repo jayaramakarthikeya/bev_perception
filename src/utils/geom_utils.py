@@ -1,5 +1,5 @@
 import torch
-import basic_utils
+from src.utils import basic_utils
 
 import numpy as np
 

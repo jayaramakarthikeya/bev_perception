@@ -3,6 +3,8 @@ code adapted from https://github.com/nv-tlabs/lift-splat-shoot
 and also https://github.com/wayveai/fiery/blob/master/fiery/data.py
 """
 
+from ast import Dict
+from sympy import centroid
 import torch
 import os
 import numpy as np
@@ -13,9 +15,9 @@ from nuscenes.nuscenes import NuScenes
 from nuscenes.utils.splits import create_splits_scenes
 from nuscenes.utils.data_classes import Box
 
-from src.utils import vox_utils
-import utils.data_utils
-import utils.geom_utils
+from src.utils import vox_utils 
+from src.utils import data_utils
+from src.utils import geom_utils
 import itertools
 import matplotlib.pyplot as plt
 
@@ -72,7 +74,7 @@ class NuscData(torch.utils.data.Dataset):
                 'ybound': [ZMIN, ZMAX, (ZMAX-ZMIN)/float(self.Z)],
                 'zbound': [YMIN, YMAX, (YMAX-YMIN)/float(self.Y)],
             }
-            dx, bx, nx = utils.data_utils.gen_dx_bx(grid_conf['xbound'], grid_conf['ybound'], grid_conf['zbound'])
+            dx, bx, nx = data_utils.gen_dx_bx(grid_conf['xbound'], grid_conf['ybound'], grid_conf['zbound'])
             self.dx, self.bx, self.nx = dx.numpy(), bx.numpy(), nx.numpy()
         else:
             print("enter the bounds and res_3d")
@@ -229,18 +231,18 @@ class NuscData(torch.utils.data.Dataset):
             sx = resize_dims[0]/float(W)
             sy = resize_dims[1]/float(H)
 
-            intrin = utils.geom_utils.scale_intrinsics(intrin.unsqueeze(0), sx, sy).squeeze(0)
+            intrin = geom_utils.scale_intrinsics(intrin.unsqueeze(0), sx, sy).squeeze(0)
 
-            fx, fy, x0, y0 = utils.geom_utils.split_intrinsics(intrin.unsqueeze(0))
+            fx, fy, x0, y0 = geom_utils.split_intrinsics(intrin.unsqueeze(0))
 
             new_x0 = x0 - crop[0]
             new_y0 = y0 - crop[1]
 
-            pix_T_cam = utils.geom_utils.merge_intrinsics(fx, fy, new_x0, new_y0)
+            pix_T_cam = geom_utils.merge_intrinsics(fx, fy, new_x0, new_y0)
             intrin = pix_T_cam.squeeze(0)
 
-            img = utils.data_utils.img_transform(img, resize_dims, crop)
-            imgs.append(utils.data_utils.totorch_img(img))
+            img = data_utils.img_transform(img, resize_dims, crop)
+            imgs.append(data_utils.totorch_img(img))
 
             intrins.append(intrin)
             rots.append(rot)
@@ -251,11 +253,11 @@ class NuscData(torch.utils.data.Dataset):
 
 
     def get_lidar_data(self, rec, nsweeps):
-        pts = utils.data_utils.get_lidar_data(self.nusc, rec, nsweeps=nsweeps, min_distance=2.2, dataroot=self.dataroot)
+        pts = data_utils.get_lidar_data(self.nusc, rec, nsweeps=nsweeps, min_distance=2.2, dataroot=self.dataroot)
         return pts
 
     def get_radar_data(self, rec, nsweeps):
-        pts = utils.data_utils.get_radar_data(self.nusc, rec, nsweeps=nsweeps, min_distance=2.2, use_radar_filters=self.use_radar_filters, dataroot=self.dataroot)
+        pts = data_utils.get_radar_data(self.nusc, rec, nsweeps=nsweeps, min_distance=2.2, use_radar_filters=self.use_radar_filters, dataroot=self.dataroot)
         return torch.Tensor(pts)
 
     def get_binimg(self, rec):
@@ -282,9 +284,9 @@ class NuscData(torch.utils.data.Dataset):
                 (pts - self.bx[:2] + self.dx[:2]/2.) / self.dx[:2]
                 ).astype(np.int32)
             pts[:, [1, 0]] = pts[:, [0, 1]]
-            cv2.fillPoly(img, [pts], ii+1) 
+            cv2.fillPoly(img, [pts], ii+1)  # type: ignore
 
-        return torch.Tensor(img).unsqueeze(0), torch.Tensor(utils.data_utils.convert_egopose_to_matrix_numpy(egopose))
+        return torch.Tensor(img).unsqueeze(0), torch.Tensor(data_utils.convert_egopose_to_matrix_numpy(egopose))
 
     def get_seg_bev(self, lrtlist_cam, vislist):
         B, N, D = lrtlist_cam.shape
@@ -293,7 +295,7 @@ class NuscData(torch.utils.data.Dataset):
         seg = np.zeros((self.Z, self.X))
         val = np.ones((self.Z, self.X))
 
-        corners_cam = utils.geom_utils.get_xyzlist_from_lrtlist(lrtlist_cam) # B, N, 8, 3
+        corners_cam = geom_utils.get_xyzlist_from_lrtlist(lrtlist_cam) # B, N, 8, 3
         y_cam = corners_cam[:,:,:,1] # y part; B, N, 8
         corners_mem = self.vox_util.Ref2Mem(corners_cam.reshape(B, N*8, 3), self.Z, self.Y, self.X).reshape(B, N, 8, 3)
 
@@ -310,11 +312,11 @@ class NuscData(torch.utils.data.Dataset):
             pts = np.stack([pts[0],pts[1],pts[3],pts[2]])
             
             # pts[:, [1, 0]] = pts[:, [0, 1]]
-            cv2.fillPoly(seg, [pts], n+1.0)
+            cv2.fillPoly(seg, [pts], n+1.0) # type: ignore
             
             if vislist[n]==0:
                 # draw a black rectangle if it's invisible
-                cv2.fillPoly(val, [pts], 0.0)
+                cv2.fillPoly(val, [pts], 0.0) # type: ignore
 
         return torch.Tensor(seg).unsqueeze(0), torch.Tensor(val).unsqueeze(0) # 1, Z, X
 
@@ -324,16 +326,16 @@ class NuscData(torch.utils.data.Dataset):
 
         lrtlist_mem = self.vox_util.apply_mem_T_ref_to_lrtlist(
             lrtlist_cam, self.Z, self.Y, self.X)
-        clist_cam = utils.geom_utils.get_clist_from_lrtlist(lrtlist_cam)
-        lenlist, rtlist = utils.geom_utils.split_lrtlist(lrtlist_cam) # B,N,3
-        rlist_, tlist_ = utils.geom_utils.split_rt(rtlist.reshape(B*N, 4, 4))
+        clist_cam = geom_utils.get_clist_from_lrtlist(lrtlist_cam)
+        lenlist, rtlist = geom_utils.split_lrtlist(lrtlist_cam) # B,N,3
+        rlist_, tlist_ = geom_utils.split_rt(rtlist.reshape(B*N, 4, 4))
 
         x_vec = torch.zeros((B*N, 3), dtype=torch.float32, device=rlist_.device)
         x_vec[:, 0] = 1 # 0,0,1 
         x_rot = torch.matmul(rlist_, x_vec.unsqueeze(2)).squeeze(2)
 
         rylist = torch.atan2(x_rot[:, 0], x_rot[:, 2]).reshape(N)
-        rylist = utils.geom_utils.wrap2pi(rylist + np.pi/2.0)
+        rylist = geom_utils.wrap2pi(rylist + np.pi/2.0)
 
         radius = 3
         center, offset = self.vox_util.xyz2circles_bev(clist_cam, radius, self.Z, self.Y, self.X, already_mem=False, also_offset=True)
@@ -403,7 +405,7 @@ class NuscData(torch.utils.data.Dataset):
             t = box.center
             l = box.wlh
             l = np.stack([l[1],l[0],l[2]])
-            lrt = utils.data_utils.merge_lrt(l, utils.data_utils.merge_rt(r,t))
+            lrt = data_utils.merge_lrt(l, data_utils.merge_rt(r,t))
             lrt = torch.Tensor(lrt)
             lrtlist.append(lrt)
             ry, _, _ = Quaternion(inst['rotation']).yaw_pitch_roll
@@ -487,7 +489,7 @@ class VizData(NuscData):
         intrins[0] = intrin_ref
         intrins[refcam_id] = intrin_0
         
-        radar_data = self.get_radar_data(rec, nsweeps=self.nsweeps)
+        #radar_data = self.get_radar_data(rec, nsweeps=self.nsweeps)
 
         lidar_extra = lidar_data[3:]
         lidar_data = lidar_data[:3]
@@ -498,11 +500,11 @@ class VizData(NuscData):
         # import ipdb; ipdb.set_trace()
         if N_ > 0:
             
-            velo_T_cam = utils.geom_utils.merge_rt(rots, trans)
-            cam_T_velo = utils.geom_utils.safe_inverse(velo_T_cam)
+            velo_T_cam = geom_utils.merge_rt(rots, trans)
+            cam_T_velo = geom_utils.safe_inverse(velo_T_cam)
 
             # note we index 0:1, since we already put refcam into zeroth position
-            lrtlist_cam = utils.geom_utils.apply_4x4_to_lrt(cam_T_velo[0:1].repeat(N_, 1, 1), lrtlist_).unsqueeze(0)
+            lrtlist_cam = geom_utils.apply_4x4_to_lrt(cam_T_velo[0:1].repeat(N_, 1, 1), lrtlist_).unsqueeze(0)
 
             seg_bev, valid_bev = self.get_seg_bev(lrtlist_cam, vislist_)
             
@@ -553,27 +555,27 @@ class VizData(NuscData):
         lidar_extra = np.transpose(lidar_extra)
 
         # radar has <700 points 
-        radar_data = np.transpose(radar_data)
-        V = 700*self.nsweeps
-        if radar_data.shape[0] > V:
-            print('radar_data', radar_data.shape)
-            print('max pts', V)
-            assert(False) # i expect this to never happen
-            radar_data = radar_data[:V]
-        elif radar_data.shape[0] < V:
-            radar_data = np.pad(radar_data,[(0,V-radar_data.shape[0]),(0,0)],mode='constant')
-        radar_data = np.transpose(radar_data)
+        # radar_data = np.transpose(radar_data)
+        # V = 700*self.nsweeps
+        # if radar_data.shape[0] > V:
+        #     print('radar_data', radar_data.shape)
+        #     print('max pts', V)
+        #     assert(False) # i expect this to never happen
+        #     radar_data = radar_data[:V]
+        # elif radar_data.shape[0] < V:
+        #     radar_data = np.pad(radar_data,[(0,V-radar_data.shape[0]),(0,0)],mode='constant')
+        # radar_data = np.transpose(radar_data)
 
         lidar0_data = torch.from_numpy(lidar0_data).float()
         lidar0_extra = torch.from_numpy(lidar0_extra).float()
         lidar_data = torch.from_numpy(lidar_data).float()
         lidar_extra = torch.from_numpy(lidar_extra).float()
-        radar_data = torch.from_numpy(radar_data).float()
+        #radar_data = torch.from_numpy(radar_data).float()
 
         binimg = (binimg > 0).float()
         seg_bev = (seg_bev > 0).float()
 
-        return imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, lrtlist, vislist, tidlist_, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, radar_data, egopose
+        return imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, lrtlist, vislist, tidlist_, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose
     
     def __getitem__(self, index):
 
@@ -601,14 +603,13 @@ class VizData(NuscData):
         all_valid_bev = []
         all_center_bev = []
         all_offset_bev = []
-        all_radar_data = []
         all_egopose = []
         for index_t in self.indices[index]:
             # print('grabbing index %d' % index_t)
             if self.get_tids:
-                imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, lrtlist, vislist, tidlist, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, radar_data, egopose = self.get_single_item(index_t, cams, refcam_id=refcam_id)
+                imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, lrtlist, vislist, tidlist, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose = self.get_single_item(index_t, cams, refcam_id=refcam_id)
             else:
-                imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, lrtlist, vislist, _, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, radar_data, egopose = self.get_single_item(index_t, cams, refcam_id=refcam_id)
+                imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, lrtlist, vislist, _, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose = self.get_single_item(index_t, cams, refcam_id=refcam_id)
 
             all_imgs.append(imgs)
             all_rots.append(rots)
@@ -626,9 +627,8 @@ class VizData(NuscData):
             all_valid_bev.append(valid_bev)
             all_center_bev.append(center_bev)
             all_offset_bev.append(offset_bev)
-            all_radar_data.append(radar_data)
             all_egopose.append(egopose)
-
+        
         all_imgs = torch.stack(all_imgs)
         all_rots = torch.stack(all_rots)
         all_trans = torch.stack(all_trans)
@@ -645,7 +645,6 @@ class VizData(NuscData):
         all_valid_bev = torch.stack(all_valid_bev)
         all_center_bev = torch.stack(all_center_bev)
         all_offset_bev = torch.stack(all_offset_bev)
-        all_radar_data = torch.stack(all_radar_data)
         all_egopose = torch.stack(all_egopose)
         
         usable_tidlist = -1*torch.ones_like(all_scorelist).long()
@@ -664,65 +663,85 @@ class VizData(NuscData):
                         counter += 1
         all_tidlist = usable_tidlist
 
-        return all_imgs, all_rots, all_trans, all_intrins, all_lidar0_data, all_lidar0_extra, all_lidar_data, all_lidar_extra, all_lrtlist, all_vislist, all_tidlist, all_scorelist, all_seg_bev, all_valid_bev, all_center_bev, all_offset_bev, all_radar_data, all_egopose
+        return all_imgs, all_rots, all_trans, all_intrins, all_lidar0_data, all_lidar0_extra, all_lidar_data, all_lidar_extra, all_lrtlist, all_vislist, all_tidlist, all_scorelist, all_seg_bev, all_valid_bev, all_center_bev, all_offset_bev, all_egopose
 
 
 def worker_rnd_init(x):
     np.random.seed(13 + x)
 
-@hydra.main(config_path="/data/karthik/bev_perception/configs/datamodule/nuscenes.yaml")
-def compile_data(version, dataroot, data_aug_conf, centroid, bounds, res_3d, bsz,
-                 nworkers, shuffle=True, nsweeps=1, nworkers_val=1, seqlen=1, refcam_id=1, get_tids=False,
-                 temporal_aug=False, use_radar_filters=False, do_shuffle_cams=True):
+@hydra.main(config_path="/data/karthik/bev_perception/configs/datamodule",config_name="nuscenes")
+def compile_data(config: DictConfig):
 
     print('loading nuscenes...')
-    nusc = NuScenes(version='v1.0-{}'.format(version),
-                    dataroot=os.path.join(dataroot, version),
+    nusc = NuScenes(version='v1.0-{}'.format(config.params.version),
+                    dataroot=config.params.dataroot,
                     verbose=False)
     print('making parser...')
+    centroid = np.array([config.params.scene_centroid_x,
+                              config.params.scene_centroid_y,
+                              config.params.scene_centroid_z]).reshape([1, 3])
     traindata = VizData(
         nusc,
+        dataroot=config.params.dataroot,
         is_train=True,
-        data_aug_conf=data_aug_conf,
-        nsweeps=nsweeps,
+        data_aug_conf=config.params.data_aug_conf,
+        nsweeps=config.params.nsweeps,
         centroid=centroid,
-        bounds=bounds,
-        res_3d=res_3d,
-        seqlen=seqlen,
-        refcam_id=refcam_id,
-        get_tids=get_tids,
-        temporal_aug=temporal_aug,
-        use_radar_filters=use_radar_filters,
-        do_shuffle_cams=do_shuffle_cams)
+        bounds=tuple(config.params.bounds),
+        res_3d=tuple(config.params.res_3d),
+        seqlen=config.params.seqlen,
+        refcam_id=config.params.refcam_id,
+        get_tids= config.params.get_tids,
+        temporal_aug= config.params.temporal_aug,
+        use_radar_filters=config.params.use_radar_filters,
+        do_shuffle_cams= config.params.do_shuffle_cams)
     valdata = VizData(
         nusc,
+        dataroot=config.params.dataroot,
         is_train=False,
-        data_aug_conf=data_aug_conf,
-        nsweeps=nsweeps,
+        data_aug_conf=config.params.data_aug_conf,
+        nsweeps=config.params.nsweeps,
         centroid=centroid,
-        bounds=bounds,
-        res_3d=res_3d,
-        seqlen=seqlen,
-        refcam_id=refcam_id,
-        get_tids=get_tids,
+        bounds=tuple(config.params.bounds),
+        res_3d=tuple(config.params.res_3d),
+        seqlen=config.params.seqlen,
+        refcam_id=config.params.refcam_id,
+        get_tids=config.params.get_tids,
         temporal_aug=False,
-        use_radar_filters=use_radar_filters,
+        use_radar_filters=config.params.use_radar_filters,
         do_shuffle_cams=False)
 
     trainloader = torch.utils.data.DataLoader(
         traindata,
-        batch_size=bsz,
-        shuffle=shuffle,
-        num_workers=nworkers,
+        batch_size=config.params.bsz,
+        shuffle=config.params.shuffle,
+        num_workers=config.params.nworkers,
         drop_last=True,
         worker_init_fn=worker_rnd_init,
         pin_memory=False)
     valloader = torch.utils.data.DataLoader(
         valdata,
-        batch_size=bsz,
-        shuffle=shuffle,
-        num_workers=nworkers_val,
+        batch_size=config.params.bsz,
+        shuffle=config.params.shuffle,
+        num_workers=config.params.nworkers_val,
         drop_last=True,
         pin_memory=False)
     print('data ready')
+    # for data in trainloader:
+    #     batch = [x.cuda() for x in data if isinstance(x,torch.Tensor)]
+    #     total_memory = torch.cuda.get_device_properties(0).total_memory
+    #     # reserved_memory = torch.cuda.memory_reserved(0)
+    #     # allocated_memory = torch.cuda.memory_allocated(0)
+    #     # free_memory = reserved_memory - allocated_memory
+
+    #     # #Print memory details
+    #     # #print(f"Device: {device}")
+    #     # print(f"Total Memory: {total_memory / (1024 ** 3):.2f} GB")
+    #     # print(f"Available Memory: {free_memory / (1024 ** 3):.2f} GB")
+    #     print(data)
+    #     break
     return trainloader, valloader
+
+
+if __name__ == "__main__":
+    compile_data()

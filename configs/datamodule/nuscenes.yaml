@@ -1,1 +1,29 @@
 
+params:
+  version: "mini"
+  dataroot: "/data/karthik/bev_perception/data"
+  data_aug_conf: 
+        crop_offset: 89.6
+        resize_lim: [0.8,1.2]
+        final_dim: [448,832]
+        H: 900
+        W: 1600
+        cams: ['CAM_FRONT_LEFT', 'CAM_FRONT', 'CAM_FRONT_RIGHT',
+                 'CAM_BACK_LEFT', 'CAM_BACK', 'CAM_BACK_RIGHT']
+        ncams: 6
+  scene_centroid_x: 0.0
+  scene_centroid_y: 2.0
+  scene_centroid_z: 0.0
+  bounds: [-50,50,-5,5,-50,50]
+  res_3d: [200,8,200]
+  bsz: 32
+  nworkers: 32
+  shuffle: True
+  nsweeps: 1
+  nworkers_val: 32
+  seqlen: 1
+  refcam_id: 1
+  get_tids: True
+  temporal_aug: False
+  use_radar_filters: False
+  do_shuffle_cams: True

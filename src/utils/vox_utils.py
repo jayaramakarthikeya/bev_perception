@@ -3,7 +3,7 @@ import torch
 import torch.nn.functional as F
 
 from src.utils import basic_utils
-import geom_utils
+from src.utils import geom_utils
 
 class Vox_util(object):
     def __init__(self, Z, Y, X, scene_centroid, bounds, pad=None, assert_cube=False):

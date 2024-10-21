@@ -3,3 +3,4 @@ yet-another-lightning-hydra-template/
 mlruns/
 .vscode/
 data/
+outputs/
