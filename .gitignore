@@ -1,1 +1,5 @@
 bev_perception_env/
+yet-another-lightning-hydra-template/
+mlruns/
+.vscode/
+data/
