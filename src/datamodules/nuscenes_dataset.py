@@ -285,6 +285,8 @@ class NuscData(torch.utils.data.Dataset):
                 ).astype(np.int32)
             pts[:, [1, 0]] = pts[:, [0, 1]]
             cv2.fillPoly(img, [pts], ii+1)  # type: ignore
+        
+
 
         return torch.Tensor(img).unsqueeze(0), torch.Tensor(data_utils.convert_egopose_to_matrix_numpy(egopose))
 
@@ -522,8 +524,10 @@ class VizData(NuscData):
         lrtlist = torch.zeros((N, 19), dtype=torch.float32)
         vislist = torch.zeros((N), dtype=torch.float32)
         scorelist = torch.zeros((N), dtype=torch.float32)
+        boxlist = torch.zeros((N,9),dtype=torch.float32)
         lrtlist[:N_] = lrtlist_
         vislist[:N_] = vislist_
+        boxlist[:N_] = boxlist_
         scorelist[:N_] = 1
 
         # lidar is shaped 3,V, where V~=26k 
@@ -575,7 +579,7 @@ class VizData(NuscData):
         binimg = (binimg > 0).float()
         seg_bev = (seg_bev > 0).float()
 
-        return imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, lrtlist, vislist, tidlist_, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose
+        return imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, boxlist, lrtlist, vislist, tidlist_, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose
     
     def __getitem__(self, index):
 
@@ -604,12 +608,13 @@ class VizData(NuscData):
         all_center_bev = []
         all_offset_bev = []
         all_egopose = []
+        all_boxlist = []
         for index_t in self.indices[index]:
             # print('grabbing index %d' % index_t)
             if self.get_tids:
-                imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, lrtlist, vislist, tidlist, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose = self.get_single_item(index_t, cams, refcam_id=refcam_id)
+                imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, boxlist, lrtlist, vislist, tidlist, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose = self.get_single_item(index_t, cams, refcam_id=refcam_id)
             else:
-                imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, lrtlist, vislist, _, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose = self.get_single_item(index_t, cams, refcam_id=refcam_id)
+                imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, boxlist, lrtlist, vislist, _, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose = self.get_single_item(index_t, cams, refcam_id=refcam_id)
 
             all_imgs.append(imgs)
             all_rots.append(rots)
@@ -628,6 +633,7 @@ class VizData(NuscData):
             all_center_bev.append(center_bev)
             all_offset_bev.append(offset_bev)
             all_egopose.append(egopose)
+            all_boxlist.append(boxlist)
         
         all_imgs = torch.stack(all_imgs)
         all_rots = torch.stack(all_rots)
@@ -646,6 +652,7 @@ class VizData(NuscData):
         all_center_bev = torch.stack(all_center_bev)
         all_offset_bev = torch.stack(all_offset_bev)
         all_egopose = torch.stack(all_egopose)
+        all_boxlist = torch.stack(all_boxlist)
         
         usable_tidlist = -1*torch.ones_like(all_scorelist).long()
         counter = 0
@@ -663,7 +670,7 @@ class VizData(NuscData):
                         counter += 1
         all_tidlist = usable_tidlist
 
-        return all_imgs, all_rots, all_trans, all_intrins, all_lidar0_data, all_lidar0_extra, all_lidar_data, all_lidar_extra, all_lrtlist, all_vislist, all_tidlist, all_scorelist, all_seg_bev, all_valid_bev, all_center_bev, all_offset_bev, all_egopose
+        return all_imgs, all_rots, all_trans, all_intrins, all_lidar0_data, all_lidar0_extra, all_lidar_data, all_lidar_extra, all_boxlist, all_lrtlist, all_vislist, all_tidlist, all_scorelist, all_seg_bev, all_valid_bev, all_center_bev, all_offset_bev, all_egopose
 
 
 def worker_rnd_init(x):
@@ -728,8 +735,8 @@ def compile_data(config: DictConfig):
         pin_memory=False)
     print('data ready')
     # for data in trainloader:
-    #     batch = [x.cuda() for x in data if isinstance(x,torch.Tensor)]
-    #     total_memory = torch.cuda.get_device_properties(0).total_memory
+    #     #batch = [x.cuda() for x in data if isinstance(x,torch.Tensor)]
+    #     #total_memory = torch.cuda.get_device_properties(0).total_memory
     #     # reserved_memory = torch.cuda.memory_reserved(0)
     #     # allocated_memory = torch.cuda.memory_allocated(0)
     #     # free_memory = reserved_memory - allocated_memory
