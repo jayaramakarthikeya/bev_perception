@@ -4,6 +4,7 @@ and also https://github.com/wayveai/fiery/blob/master/fiery/data.py
 """
 
 from ast import Dict
+from nis import cat
 from sympy import centroid
 import torch
 import os
@@ -45,6 +46,35 @@ class NuscData(torch.utils.data.Dataset):
         self.seqlen = seqlen
         self.refcam_id = refcam_id
 
+        self.NameMapping = {
+            "movable_object.barrier": "barrier",
+            "vehicle.bicycle": "bicycle",
+            "vehicle.bus.bendy": "bus",
+            "vehicle.bus.rigid": "bus",
+            "vehicle.car": "car",
+            "vehicle.construction": "construction_vehicle",
+            "vehicle.motorcycle": "motorcycle",
+            "human.pedestrian.adult": "pedestrian",
+            "human.pedestrian.child": "pedestrian",
+            "human.pedestrian.construction_worker": "pedestrian",
+            "human.pedestrian.police_officer": "pedestrian",
+            "movable_object.trafficcone": "traffic_cone",
+            "vehicle.trailer": "trailer",
+            "vehicle.truck": "truck",
+        }
+
+        self.CLASSES = [
+            "car",
+            "truck",
+            "trailer",
+            "bus",
+            "construction_vehicle",
+            "bicycle",
+            "motorcycle",
+            "pedestrian",
+            "traffic_cone",
+            "barrier",
+        ]
                     
 
         
@@ -86,7 +116,7 @@ class NuscData(torch.utils.data.Dataset):
             bounds=self.bounds,
             assert_cube=False)
 
-        print(self)
+        
     
     def get_scenes(self):
         
@@ -385,6 +415,7 @@ class NuscData(torch.utils.data.Dataset):
         boxlist = []
         vislist = []
         tidlist = []
+        cate_list = []
         for tok in rec['anns']:
             inst = self.nusc.get('sample_annotation', tok)
 
@@ -412,23 +443,28 @@ class NuscData(torch.utils.data.Dataset):
             lrtlist.append(lrt)
             ry, _, _ = Quaternion(inst['rotation']).yaw_pitch_roll
             # print('rx, ry, rz', rx, ry, rz)
-            rs = np.stack([ry*0, ry, ry*0])
-            box_ = torch.from_numpy(np.stack([t,l,rs])).reshape(9)
+            rs = np.stack([np.cos(ry),np.sin(ry)])
+            vel = self.nusc.box_velocity(tok)[:2]
+            box_ = torch.from_numpy(np.hstack([t,l,rs,vel]))
             # print('box_', box_)
             boxlist.append(box_)
+
+            cate_list.append(self.CLASSES.index(self.NameMapping[inst['category_name']]))
         if len(lrtlist):
             lrtlist = torch.stack(lrtlist, dim=0)
             boxlist = torch.stack(boxlist, dim=0)
             vislist = torch.stack(vislist, dim=0)
+            cate_list = torch.tensor(cate_list)
             # tidlist = torch.stack(tidlist, dim=0)
         else:
             lrtlist = torch.zeros((0, 19))
             boxlist = torch.zeros((0, 9))
             vislist = torch.zeros((0))
+            cate_list = torch.zeros((0))
             # tidlist = torch.zeros((0))
             tidlist = []
 
-        return lrtlist, boxlist, vislist, tidlist
+        return lrtlist, boxlist, vislist, tidlist, cate_list
 
     def choose_cams(self):
         if self.is_train and self.data_aug_conf['ncams'] < len(self.data_aug_conf['cams']):
@@ -496,7 +532,7 @@ class VizData(NuscData):
         lidar_extra = lidar_data[3:]
         lidar_data = lidar_data[:3]
 
-        lrtlist_, boxlist_, vislist_, tidlist_ = self.get_lrtlist(rec)
+        lrtlist_, boxlist_, vislist_, tidlist_ , cate_list_ = self.get_lrtlist(rec)
         N_ = lrtlist_.shape[0]
 
         # import ipdb; ipdb.set_trace()
@@ -524,11 +560,13 @@ class VizData(NuscData):
         lrtlist = torch.zeros((N, 19), dtype=torch.float32)
         vislist = torch.zeros((N), dtype=torch.float32)
         scorelist = torch.zeros((N), dtype=torch.float32)
-        boxlist = torch.zeros((N,9),dtype=torch.float32)
+        boxlist = torch.zeros((N,10),dtype=torch.float32)
+        catelist = torch.zeros((N), dtype=torch.float32)
         lrtlist[:N_] = lrtlist_
         vislist[:N_] = vislist_
         boxlist[:N_] = boxlist_
         scorelist[:N_] = 1
+        catelist[:N_] = cate_list_
 
         # lidar is shaped 3,V, where V~=26k 
         times = lidar_extra[2] # V
@@ -579,7 +617,7 @@ class VizData(NuscData):
         binimg = (binimg > 0).float()
         seg_bev = (seg_bev > 0).float()
 
-        return imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, boxlist, lrtlist, vislist, tidlist_, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose
+        return imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, boxlist, catelist, vislist, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose
     
     def __getitem__(self, index):
 
@@ -599,9 +637,7 @@ class VizData(NuscData):
         all_lidar0_extra = []
         all_lidar_data = []
         all_lidar_extra = []
-        all_lrtlist = []
         all_vislist = []
-        all_tidlist = []
         all_scorelist = []
         all_seg_bev = []
         all_valid_bev = []
@@ -609,12 +645,10 @@ class VizData(NuscData):
         all_offset_bev = []
         all_egopose = []
         all_boxlist = []
+        all_catelist = []
         for index_t in self.indices[index]:
             # print('grabbing index %d' % index_t)
-            if self.get_tids:
-                imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, boxlist, lrtlist, vislist, tidlist, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose = self.get_single_item(index_t, cams, refcam_id=refcam_id)
-            else:
-                imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, boxlist, lrtlist, vislist, _, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose = self.get_single_item(index_t, cams, refcam_id=refcam_id)
+            imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, boxlist, catelist, vislist, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose = self.get_single_item(index_t, cams, refcam_id=refcam_id)
 
             all_imgs.append(imgs)
             all_rots.append(rots)
@@ -624,9 +658,7 @@ class VizData(NuscData):
             all_lidar0_extra.append(lidar0_extra)
             all_lidar_data.append(lidar_data)
             all_lidar_extra.append(lidar_extra)
-            all_lrtlist.append(lrtlist)
             all_vislist.append(vislist)
-            all_tidlist.append(tidlist)
             all_scorelist.append(scorelist)
             all_seg_bev.append(seg_bev)
             all_valid_bev.append(valid_bev)
@@ -634,6 +666,7 @@ class VizData(NuscData):
             all_offset_bev.append(offset_bev)
             all_egopose.append(egopose)
             all_boxlist.append(boxlist)
+            all_catelist.append(catelist)
         
         all_imgs = torch.stack(all_imgs)
         all_rots = torch.stack(all_rots)
@@ -643,9 +676,7 @@ class VizData(NuscData):
         all_lidar0_extra = torch.stack(all_lidar0_extra)
         all_lidar_data = torch.stack(all_lidar_data)
         all_lidar_extra = torch.stack(all_lidar_extra)
-        all_lrtlist = torch.stack(all_lrtlist)
         all_vislist = torch.stack(all_vislist)
-        # all_tidlist = torch.stack(all_tidlist)
         all_scorelist = torch.stack(all_scorelist)
         all_seg_bev = torch.stack(all_seg_bev)
         all_valid_bev = torch.stack(all_valid_bev)
@@ -653,102 +684,99 @@ class VizData(NuscData):
         all_offset_bev = torch.stack(all_offset_bev)
         all_egopose = torch.stack(all_egopose)
         all_boxlist = torch.stack(all_boxlist)
+        all_catelist = torch.stack(all_catelist)
         
-        usable_tidlist = -1*torch.ones_like(all_scorelist).long()
-        counter = 0
-        for t in range(len(all_tidlist)):
-            for i in range(len(all_tidlist[t])):
-                if t==0:
-                    usable_tidlist[t,i] = counter
-                    counter += 1
-                else:
-                    st = all_tidlist[t][i]
-                    if st in all_tidlist[0]:
-                        usable_tidlist[t,i] = all_tidlist[0].index(st)
-                    else:
-                        usable_tidlist[t,i] = counter
-                        counter += 1
-        all_tidlist = usable_tidlist
+        # usable_tidlist = -1*torch.ones_like(all_scorelist).long()
+        # counter = 0
+        # for t in range(len(all_tidlist)):
+        #     for i in range(len(all_tidlist[t])):
+        #         if t==0:
+        #             usable_tidlist[t,i] = counter
+        #             counter += 1
+        #         else:
+        #             st = all_tidlist[t][i]
+        #             if st in all_tidlist[0]:
+        #                 usable_tidlist[t,i] = all_tidlist[0].index(st)
+        #             else:
+        #                 usable_tidlist[t,i] = counter
+        #                 counter += 1
+        # all_tidlist = usable_tidlist
 
-        return all_imgs, all_rots, all_trans, all_intrins, all_lidar0_data, all_lidar0_extra, all_lidar_data, all_lidar_extra, all_boxlist, all_lrtlist, all_vislist, all_tidlist, all_scorelist, all_seg_bev, all_valid_bev, all_center_bev, all_offset_bev, all_egopose
+        return all_imgs, all_rots, all_trans, all_intrins, all_lidar0_data, all_lidar0_extra, all_lidar_data, all_lidar_extra, all_boxlist, all_catelist,  all_vislist, all_scorelist, all_seg_bev, all_valid_bev, all_center_bev, all_offset_bev, all_egopose
 
 
 def worker_rnd_init(x):
     np.random.seed(13 + x)
 
-@hydra.main(config_path="/data/karthik/bev_perception/configs/datamodule",config_name="nuscenes")
-def compile_data(config: DictConfig):
 
-    print('loading nuscenes...')
-    nusc = NuScenes(version='v1.0-{}'.format(config.params.version),
-                    dataroot=config.params.dataroot,
-                    verbose=False)
-    print('making parser...')
-    centroid = np.array([config.params.scene_centroid_x,
-                              config.params.scene_centroid_y,
-                              config.params.scene_centroid_z]).reshape([1, 3])
-    traindata = VizData(
-        nusc,
-        dataroot=config.params.dataroot,
-        is_train=True,
-        data_aug_conf=config.params.data_aug_conf,
-        nsweeps=config.params.nsweeps,
-        centroid=centroid,
-        bounds=tuple(config.params.bounds),
-        res_3d=tuple(config.params.res_3d),
-        seqlen=config.params.seqlen,
-        refcam_id=config.params.refcam_id,
-        get_tids= config.params.get_tids,
-        temporal_aug= config.params.temporal_aug,
-        use_radar_filters=config.params.use_radar_filters,
-        do_shuffle_cams= config.params.do_shuffle_cams)
-    valdata = VizData(
-        nusc,
-        dataroot=config.params.dataroot,
-        is_train=False,
-        data_aug_conf=config.params.data_aug_conf,
-        nsweeps=config.params.nsweeps,
-        centroid=centroid,
-        bounds=tuple(config.params.bounds),
-        res_3d=tuple(config.params.res_3d),
-        seqlen=config.params.seqlen,
-        refcam_id=config.params.refcam_id,
-        get_tids=config.params.get_tids,
-        temporal_aug=False,
-        use_radar_filters=config.params.use_radar_filters,
-        do_shuffle_cams=False)
+# def compile_data():
 
-    trainloader = torch.utils.data.DataLoader(
-        traindata,
-        batch_size=config.params.bsz,
-        shuffle=config.params.shuffle,
-        num_workers=config.params.nworkers,
-        drop_last=True,
-        worker_init_fn=worker_rnd_init,
-        pin_memory=False)
-    valloader = torch.utils.data.DataLoader(
-        valdata,
-        batch_size=config.params.bsz,
-        shuffle=config.params.shuffle,
-        num_workers=config.params.nworkers_val,
-        drop_last=True,
-        pin_memory=False)
-    print('data ready')
-    # for data in trainloader:
-    #     #batch = [x.cuda() for x in data if isinstance(x,torch.Tensor)]
-    #     #total_memory = torch.cuda.get_device_properties(0).total_memory
-    #     # reserved_memory = torch.cuda.memory_reserved(0)
-    #     # allocated_memory = torch.cuda.memory_allocated(0)
-    #     # free_memory = reserved_memory - allocated_memory
+#     print('loading nuscenes...')
+#     nusc = NuScenes(version='v1.0-{}'.format(config.params.version),
+#                     dataroot=config.params.dataroot,
+#                     verbose=False)
+#     print('making parser...')
+#     centroid = np.array([config.params.scene_centroid_x,
+#                               config.params.scene_centroid_y,
+#                               config.params.scene_centroid_z]).reshape([1, 3])
+#     traindata = VizData(
+#         nusc,
+#         dataroot=config.params.dataroot,
+#         is_train=True,
+#         data_aug_conf=config.params.data_aug_conf,
+#         nsweeps=config.params.nsweeps,
+#         centroid=centroid,
+#         bounds=tuple(config.params.bounds),
+#         res_3d=tuple(config.params.res_3d),
+#         seqlen=config.params.seqlen,
+#         refcam_id=config.params.refcam_id,
+#         get_tids= config.params.get_tids,
+#         temporal_aug= config.params.temporal_aug,
+#         use_radar_filters=config.params.use_radar_filters,
+#         do_shuffle_cams= config.params.do_shuffle_cams)
+#     valdata = VizData(
+#         nusc,
+#         dataroot=config.params.dataroot,
+#         is_train=False,
+#         data_aug_conf=config.params.data_aug_conf,
+#         nsweeps=config.params.nsweeps,
+#         centroid=centroid,
+#         bounds=tuple(config.params.bounds),
+#         res_3d=tuple(config.params.res_3d),
+#         seqlen=config.params.seqlen,
+#         refcam_id=config.params.refcam_id,
+#         get_tids=config.params.get_tids,
+#         temporal_aug=False,
+#         use_radar_filters=config.params.use_radar_filters,
+#         do_shuffle_cams=False)
 
-    #     # #Print memory details
-    #     # #print(f"Device: {device}")
-    #     # print(f"Total Memory: {total_memory / (1024 ** 3):.2f} GB")
-    #     # print(f"Available Memory: {free_memory / (1024 ** 3):.2f} GB")
-    #     print(data)
-    #     break
-    return trainloader, valloader
+#     trainloader = torch.utils.data.DataLoader(
+#         traindata,
+#         batch_size=config.params.bsz,
+#         shuffle=config.params.shuffle,
+#         num_workers=config.params.nworkers,
+#         drop_last=True,
+#         worker_init_fn=worker_rnd_init,
+#         pin_memory=False)
+#     valloader = torch.utils.data.DataLoader(
+#         valdata,
+#         batch_size=config.params.bsz,
+#         shuffle=config.params.shuffle,
+#         num_workers=config.params.nworkers_val,
+#         drop_last=True,
+#         pin_memory=False)
+#     # print('data ready')
+#     # for data in trainloader:
+#     #     #batch = [x.cuda() for x in data if isinstance(x,torch.Tensor)]
+#     #     #total_memory = torch.cuda.get_device_properties(0).total_memory
+#     #     # reserved_memory = torch.cuda.memory_reserved(0)
+#     #     # allocated_memory = torch.cuda.memory_allocated(0)
+#     #     # free_memory = reserved_memory - allocated_memory
 
-
-if __name__ == "__main__":
-    compile_data()
+#     #     # #Print memory details
+#     #     # #print(f"Device: {device}")
+#     #     # print(f"Total Memory: {total_memory / (1024 ** 3):.2f} GB")
+#     #     # print(f"Available Memory: {free_memory / (1024 ** 3):.2f} GB")
+#     #     print(data)
+#     #     break
+#     return trainloader, valloader
