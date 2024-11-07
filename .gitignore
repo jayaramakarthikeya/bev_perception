@@ -9,3 +9,5 @@ best_vae_model.pth
 celeba_10000_images.zip
 CIS6800_Diffusion_HW.ipynb
 diffusion.py
+lightning_logs/
+**__pycache__/

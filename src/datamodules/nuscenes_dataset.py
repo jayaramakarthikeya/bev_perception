@@ -239,6 +239,16 @@ class NuscData(torch.utils.data.Dataset):
             crop = (crop_w, crop_h, crop_w + fW, crop_h + fH)
         return resize_dims, crop
 
+    def augment_bounding_boxes(self,box:Box,resize_dims,crop):
+        scale_x = resize_dims[0] / self.data_aug_conf['W']
+        scale_y = resize_dims[1] / self.data_aug_conf['H']
+
+        box.wlh *= np.array((scale_x,scale_y,1.0))
+        box.translate(np.array([-crop[0],-crop[1],0]))
+
+        return box
+    
+    
     def get_image_data(self, rec, cams):
         imgs = []
         rots = []
@@ -411,6 +421,8 @@ class NuscData(torch.utils.data.Dataset):
         egopose = self.nusc.get('ego_pose', self.nusc.get('sample_data', rec['data']['LIDAR_TOP'])['ego_pose_token'])
         trans = -np.array(egopose['translation'])
         rot = Quaternion(egopose['rotation']).inverse
+
+        cs_record = self.nusc.get('calibrated_sensor', self.nusc.get('sample_data',  rec['data']['LIDAR_TOP'])['calibrated_sensor_token'])
         lrtlist = []
         boxlist = []
         vislist = []
@@ -420,18 +432,20 @@ class NuscData(torch.utils.data.Dataset):
             inst = self.nusc.get('sample_annotation', tok)
 
             # NuScenes filter
-            if 'vehicle' not in inst['category_name']:
+            if inst['category_name'] not in self.NameMapping.keys():
                 continue
             if int(inst['visibility_token']) == 1:
                 vislist.append(torch.tensor(0.0)) # invisible
             else:
                 vislist.append(torch.tensor(1.0)) # visible
                 
-            box = Box(inst['translation'], inst['size'], Quaternion(inst['rotation']))
+            box = Box(inst['translation'], inst['size'], Quaternion(inst['rotation']),velocity=self.nusc.box_velocity(tok))
+            #resize, crop = self.sample_augmentation()
+            #box = self.augment_bounding_boxes(box, resize, crop)
             box.translate(trans)
             box.rotate(rot)
 
-            tidlist.append(inst['instance_token'])
+            #boxlist.append(box)
 
             # print('rotation', inst['rotation'])
             r = box.rotation_matrix
@@ -441,11 +455,16 @@ class NuscData(torch.utils.data.Dataset):
             lrt = data_utils.merge_lrt(l, data_utils.merge_rt(r,t))
             lrt = torch.Tensor(lrt)
             lrtlist.append(lrt)
-            ry, _, _ = Quaternion(inst['rotation']).yaw_pitch_roll
+            tidlist.append(inst['instance_token'])
+
+            #box.translate(-np.array(cs_record['translation']))
+            #box.rotate(Quaternion(cs_record['rotation']).inverse)
+            ry, _, _ = box.orientation.yaw_pitch_roll
             # print('rx, ry, rz', rx, ry, rz)
-            rs = np.stack([np.cos(ry),np.sin(ry)])
-            vel = self.nusc.box_velocity(tok)[:2]
-            box_ = torch.from_numpy(np.hstack([t,l,rs,vel]))
+            rs = np.stack([np.cos(-ry),np.sin(-ry)])
+            
+            vel = box.velocity[:2]
+            box_ = torch.from_numpy(np.hstack([box.center,box.wlh,box.orientation.w,box.orientation.x,box.orientation.y,box.orientation.z]))
             # print('box_', box_)
             boxlist.append(box_)
 
@@ -617,7 +636,7 @@ class VizData(NuscData):
         binimg = (binimg > 0).float()
         seg_bev = (seg_bev > 0).float()
 
-        return imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, boxlist, catelist, vislist, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose
+        return imgs, tidlist_, rots, trans, intrins, lrtlist, lidar0_data, lidar0_extra, lidar_data, lidar_extra, boxlist, catelist, vislist, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose
     
     def __getitem__(self, index):
 
@@ -646,9 +665,10 @@ class VizData(NuscData):
         all_egopose = []
         all_boxlist = []
         all_catelist = []
+        all_lrtlist = []
         for index_t in self.indices[index]:
             # print('grabbing index %d' % index_t)
-            imgs, rots, trans, intrins, lidar0_data, lidar0_extra, lidar_data, lidar_extra, boxlist, catelist, vislist, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose = self.get_single_item(index_t, cams, refcam_id=refcam_id)
+            imgs, tidlist_, rots, trans, intrins, lrtlist, lidar0_data, lidar0_extra, lidar_data, lidar_extra, boxlist, catelist, vislist, scorelist, seg_bev, valid_bev, center_bev, offset_bev, size_bev, ry_bev, ycoord_bev, egopose = self.get_single_item(index_t, cams, refcam_id=refcam_id)
 
             all_imgs.append(imgs)
             all_rots.append(rots)
@@ -667,6 +687,7 @@ class VizData(NuscData):
             all_egopose.append(egopose)
             all_boxlist.append(boxlist)
             all_catelist.append(catelist)
+            all_lrtlist.append(lrtlist)
         
         all_imgs = torch.stack(all_imgs)
         all_rots = torch.stack(all_rots)
@@ -685,6 +706,7 @@ class VizData(NuscData):
         all_egopose = torch.stack(all_egopose)
         all_boxlist = torch.stack(all_boxlist)
         all_catelist = torch.stack(all_catelist)
+        all_lrtlist = torch.stack(all_lrtlist)
         
         # usable_tidlist = -1*torch.ones_like(all_scorelist).long()
         # counter = 0
@@ -702,7 +724,7 @@ class VizData(NuscData):
         #                 counter += 1
         # all_tidlist = usable_tidlist
 
-        return all_imgs, all_rots, all_trans, all_intrins, all_lidar0_data, all_lidar0_extra, all_lidar_data, all_lidar_extra, all_boxlist, all_catelist,  all_vislist, all_scorelist, all_seg_bev, all_valid_bev, all_center_bev, all_offset_bev, all_egopose
+        return all_imgs, all_rots, all_trans, all_intrins, all_lrtlist, all_lidar0_data, all_lidar0_extra, all_lidar_data, all_lidar_extra, all_boxlist, all_catelist,  all_vislist, all_scorelist, all_seg_bev, all_valid_bev, all_center_bev, all_offset_bev, all_egopose
 
 
 def worker_rnd_init(x):

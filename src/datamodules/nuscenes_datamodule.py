@@ -7,7 +7,7 @@ from src.utils import vox_utils, data_utils, geom_utils
 import hydra
 from omegaconf import DictConfig
 import matplotlib.pyplot as plt
-from src.datamodules.nuscenes_dataset import NuscData, VizData
+from src.datamodules.nuscenes_dataset import NuscData, VizData # type: ignore
 
 class NuScenesDataModule(pl.LightningDataModule):
     def __init__(self, datasets: DictConfig, loaders: DictConfig, transforms: DictConfig):
@@ -84,22 +84,25 @@ def main(cfg: DictConfig):
     train_loader = data_module.train_dataloader()
 
     # Get a batch from the dataloader
-    batch = next(iter(train_loader))
+    # batch = next(iter(train_loader))
 
-    # Assuming the batch contains images as the first element
-    images = batch[0].squeeze(1)  # Adjust this depending on how the data is returned by the dataloader
+    # # Assuming the batch contains images as the first element
+    # images = batch[0].squeeze(1)  # Adjust this depending on how the data is returned by the dataloader
 
-    # Plot 6 multiple view images
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-    axes = axes.flatten()
+    # # Plot 6 multiple view images
+    # fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    # axes = axes.flatten()
 
-    for i in range(6):
-        img = images[0, i].permute(1, 2, 0).cpu().numpy()  # Convert to HWC format
-        axes[i].imshow(img)
-        axes[i].axis('off')
+    # for i in range(6):
+    #     img = images[0, i].permute(1, 2, 0).cpu().numpy()  # Convert to HWC format
+    #     axes[i].imshow(img)
+    #     axes[i].axis('off')
 
-    plt.tight_layout()
-    plt.show()
+    # plt.tight_layout()
+    # plt.show()
+
+    for batch in train_loader:
+        continue
 
 if __name__ == "__main__":
     main()
